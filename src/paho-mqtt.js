@@ -863,31 +863,37 @@ function onMessageArrived(message) {
 		ClientImpl.prototype.connect = function (connectOptions) {
 			var connectOptionsMasked = this._traceMask(connectOptions, "password");
 			this._trace("Client.connect", connectOptionsMasked, this.socket, this.connected);
-
-			if (this.connected)
+		
+			if (this.connected) {
 				throw new Error(format(ERROR.INVALID_STATE, ["already connected"]));
-			if (this.socket)
+			}
+			if (this.socket) {
 				throw new Error(format(ERROR.INVALID_STATE, ["already connected"]));
-
+			}
+		
 			if (this._reconnecting) {
-			// connect() function is called while reconnect is in progress.
-			// Terminate the auto reconnect process to use new connect options.
+				// connect() function is called while reconnect is in progress.
+				// Terminate the auto reconnect process to use new connect options.
 				this._reconnectTimeout.cancel();
 				this._reconnectTimeout = null;
 				this._reconnecting = false;
 			}
-
+		
 			this.connectOptions = connectOptions;
+			if (connectOptions.customHeaders) {
+				console.log(connectOptions.customHeaders);
+				this.connectOptions.customHeaders = connectOptions.customHeaders; // Save custom headers
+			}
 			this._reconnectInterval = 1;
 			this._reconnecting = false;
+		
 			if (connectOptions.uris) {
 				this.hostIndex = 0;
 				this._doConnect(connectOptions.uris[0]);
 			} else {
 				this._doConnect(this.uri);
 			}
-
-		};
+		};		
 
 		ClientImpl.prototype.subscribe = function (filter, subscribeOptions) {
 			this._trace("Client.subscribe", filter, subscribeOptions);
@@ -1037,7 +1043,6 @@ function onMessageArrived(message) {
 		};
 
 		ClientImpl.prototype._doConnect = function (wsurl) {
-		// When the socket is open, this client will send the CONNECT WireMessage using the saved parameters.
 			if (this.connectOptions.useSSL) {
 				var uriParts = wsurl.split(":");
 				uriParts[0] = "wss";
@@ -1045,28 +1050,59 @@ function onMessageArrived(message) {
 			}
 			this._wsuri = wsurl;
 			this.connected = false;
-
-
-
-			if (this.connectOptions.mqttVersion < 4) {
-				this.socket = new WebSocket(wsurl, ["mqttv3.1"]);
-			} else {
-				this.socket = new WebSocket(wsurl, ["mqtt"]);
+		
+			const customHeaders = this.connectOptions.customHeaders || {}; // Retrieve custom headers if provided
+		
+			// Note: WebSocket in browsers does not support custom headers. 
+			// If needed, headers must be implemented via query parameters or server changes.
+			const queryParams = Object.entries(customHeaders)
+				.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+				.join("&");
+		
+			if (queryParams) {
+				wsurl += (wsurl.includes("?") ? "&" : "?") + queryParams;
 			}
+
+			console.log("Connecting to server at wsurl: " + wsurl);
+		
+			// WebSocket initialization
+			if (this.connectOptions.mqttVersion < 4) {
+				this.socket = new WebSocket(wsurl, {
+					protocol: "mqttv3.1",
+					headers: {
+						'Origin': 'https://your-server.com'
+					}
+				});
+			} else {
+				this.socket = new WebSocket(wsurl, {
+					protocol: "mqtt",
+					headers: {
+						'Origin': 'https://your-server.com'
+					}
+				});
+			}
+		
 			this.socket.binaryType = "arraybuffer";
 			this.socket.onopen = scope(this._on_socket_open, this);
 			this.socket.onmessage = scope(this._on_socket_message, this);
 			this.socket.onerror = scope(this._on_socket_error, this);
 			this.socket.onclose = scope(this._on_socket_close, this);
-
+		
 			this.sendPinger = new Pinger(this, this.connectOptions.keepAliveInterval);
 			this.receivePinger = new Pinger(this, this.connectOptions.keepAliveInterval);
+		
 			if (this._connectTimeout) {
 				this._connectTimeout.cancel();
 				this._connectTimeout = null;
 			}
-			this._connectTimeout = new Timeout(this, this.connectOptions.timeout, this._disconnected,  [ERROR.CONNECT_TIMEOUT.code, format(ERROR.CONNECT_TIMEOUT)]);
-		};
+		
+			this._connectTimeout = new Timeout(
+				this,
+				this.connectOptions.timeout,
+				this._disconnected,
+				[ERROR.CONNECT_TIMEOUT.code, format(ERROR.CONNECT_TIMEOUT)]
+			);
+		};		
 
 
 		// Schedule a new message to be sent over the WebSockets
@@ -1945,6 +1981,7 @@ function onMessageArrived(message) {
 					reconnect:"boolean",
 					mqttVersion:"number",
 					mqttVersionExplicit:"boolean",
+					customHeaders: "object",
 					uris: "object"});
 
 				// If no keep alive interval is set, assume 60 seconds.
